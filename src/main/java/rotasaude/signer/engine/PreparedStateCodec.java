@@ -16,21 +16,34 @@ import rotasaude.signer.SignerFailure;
 /**
  * prepared_state opaco: versão, tipo, certificado, atributos assinados e PDF preparado,
  * selados com HMAC-SHA256 (chave derivada do SIGNER_TOKEN). Estado adulterado = 400.
+ * O mesmo limite por campo vale nos dois sentidos: o encode (no /prepare, antes de o PSC assinar)
+ * recusa com 400 o que o decode (no /assemble) recusaria. 32 MiB em base64 ainda cabe no corpo de 48 MB.
  */
 public final class PreparedStateCodec {
 
     private static final int VERSION = 1;
     private static final int MAC_LENGTH = 32;
-    private static final int MAX_FIELD = 32 * 1024 * 1024;
+    static final int MAX_FIELD = 32 * 1024 * 1024;
 
     private final byte[] key;
+    private final int maxField;
 
     public PreparedStateCodec(String sharedToken) {
+        this(sharedToken, MAX_FIELD);
+    }
+
+    /** maxField menor só em teste, para não alocar 32 MiB. */
+    PreparedStateCodec(String sharedToken, int maxField) {
+        this.maxField = maxField;
         this.key = hmac(sharedToken.getBytes(StandardCharsets.UTF_8),
                 "rotasaude.signer.prepared_state.v1".getBytes(StandardCharsets.UTF_8));
     }
 
     public String encode(PreparedSignature prepared) {
+        byte[] pdf = prepared.preparedPdf() == null ? new byte[0] : prepared.preparedPdf();
+        for (byte[] field : new byte[][] {prepared.certificateDer(), prepared.signedAttributesDer(), pdf}) {
+            if (field.length > maxField) throw invalid(); // o /assemble não o aceitaria: falha antes de assinar
+        }
         try {
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             DataOutputStream out = new DataOutputStream(buffer);
@@ -38,7 +51,7 @@ public final class PreparedStateCodec {
             out.writeByte(prepared.kind().ordinal());
             writeField(out, prepared.certificateDer());
             writeField(out, prepared.signedAttributesDer());
-            writeField(out, prepared.preparedPdf() == null ? new byte[0] : prepared.preparedPdf());
+            writeField(out, pdf);
             out.flush();
             byte[] body = buffer.toByteArray();
             byte[] sealed = Arrays.copyOf(body, body.length + MAC_LENGTH);
@@ -80,9 +93,9 @@ public final class PreparedStateCodec {
         out.write(value);
     }
 
-    private static byte[] readField(DataInputStream in) throws IOException {
+    private byte[] readField(DataInputStream in) throws IOException {
         int length = in.readInt();
-        if (length < 0 || length > MAX_FIELD || length > in.available()) throw invalid();
+        if (length < 0 || length > maxField || length > in.available()) throw invalid();
         return in.readNBytes(length);
     }
 
