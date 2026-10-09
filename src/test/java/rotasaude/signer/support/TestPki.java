@@ -32,16 +32,31 @@ public final class TestPki {
     public static final String NAME = "ANA BEATRIZ SOUZA";
 
     private static TestPki instance;
+    private static final java.security.KeyPair FOREIGN_KEY = foreignKey();
+
+    private static java.security.KeyPair foreignKey() {
+        try {
+            java.security.KeyPairGenerator generator = java.security.KeyPairGenerator.getInstance("RSA");
+            generator.initialize(2048);
+            return generator.generateKeyPair();
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
 
     public final DevPki pki;
     private volatile boolean crlAvailable = true;
+    private volatile CrlMode crlMode = CrlMode.GOOD;
+
+    /** Como o ponto de distribuição serve as LCRs: boa, assinada por outra chave ou vencida (nextUpdate no passado). */
+    public enum CrlMode { GOOD, WRONG_KEY, EXPIRED }
 
     private TestPki() throws IOException {
         HttpServer crlServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         pki = DevPki.generate("http://127.0.0.1:" + crlServer.getAddress().getPort() + "/");
         crlServer.createContext("/", exchange -> {
             String name = exchange.getRequestURI().getPath().substring(1);
-            byte[] body = crlAvailable ? pki.crl(name) : new byte[0];
+            byte[] body = crlAvailable ? crlBody(name) : new byte[0];
             exchange.getResponseHeaders().set("Connection", "close"); // sem keep-alive: conexão velha reaproveitada estoura o timeout da LCR
             exchange.sendResponseHeaders(crlAvailable ? 200 : 503, crlAvailable ? body.length : -1);
             try (OutputStream out = exchange.getResponseBody()) {
@@ -81,6 +96,22 @@ public final class TestPki {
         Instant now = Instant.now();
         return DevPki.generate("http://127.0.0.1:9/").issue(CPF, NAME, LocalDate.of(1980, 5, 17),
                 now.minus(Duration.ofDays(1)), now.plus(Duration.ofDays(365)));
+    }
+
+    private byte[] crlBody(String name) {
+        Instant now = Instant.now();
+        switch (crlMode) {
+            case WRONG_KEY:
+                return pki.crl(name, now.minusSeconds(60), now.plus(Duration.ofDays(1)), FOREIGN_KEY.getPrivate());
+            case EXPIRED:
+                return pki.crl(name, now.minus(Duration.ofDays(10)), now.minus(Duration.ofDays(1)), null);
+            default:
+                return pki.crl(name);
+        }
+    }
+
+    public void crlMode(CrlMode mode) {
+        crlMode = mode;
     }
 
     public void crlAvailable(boolean available) {

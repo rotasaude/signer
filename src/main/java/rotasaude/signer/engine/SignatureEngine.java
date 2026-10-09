@@ -46,7 +46,7 @@ public final class SignatureEngine {
 
     public Verification verify(Kind kind, byte[] document, byte[] signature) {
         if (kind == Kind.CADES && document == null) throw new SignerFailure(SignerFailure.Code.INVALID_REQUEST);
-        return SignatureVerifier.verify(kind, document, signature);
+        return SignatureVerifier.verify(kind, document, signature, clock.instant());
     }
 
     public CertificateCheck checkCertificate(byte[] certificateDer) {

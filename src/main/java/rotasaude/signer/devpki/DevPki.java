@@ -125,19 +125,27 @@ public final class DevPki {
         revoked.put(serial, when);
     }
 
+    /** Desfaz revoke (testes que revogam a AC intermediária compartilhada). */
+    public synchronized void unrevoke(BigInteger serial) {
+        revoked.remove(serial);
+    }
+
     /** "root.crl" (emitida pela raiz) ou "intermediate.crl" (pela intermediária, com as revogações). */
     public synchronized byte[] crl(String name) {
+        Instant now = Instant.now();
+        return crl(name, now.minusSeconds(60), now.plus(Duration.ofDays(3650)), null); // AC de teste: LCR longa, para o volume de dev não vencer
+    }
+
+    /** LCR com vigência e chave de assinatura à escolha (signingKey null = a da AC emissora); para testes de LCR inautêntica. */
+    public synchronized byte[] crl(String name, Instant thisUpdate, Instant nextUpdate, PrivateKey signingKey) {
         try {
             boolean ofRoot = "root.crl".equals(name);
             X509Certificate issuer = ofRoot ? root : intermediate;
-            Instant now = Instant.now();
-            X509v2CRLBuilder builder = new X509v2CRLBuilder(new JcaX509CertificateHolder(issuer).getSubject(), Date.from(now.minusSeconds(60)));
-            builder.setNextUpdate(Date.from(now.plus(Duration.ofDays(3650)))); // AC de teste: LCR longa, para o volume de dev não vencer
-            if (!ofRoot) {
-                revoked.forEach((serial, when) -> builder.addCRLEntry(serial, Date.from(when), CRLReason.keyCompromise));
-            }
+            X509v2CRLBuilder builder = new X509v2CRLBuilder(new JcaX509CertificateHolder(issuer).getSubject(), Date.from(thisUpdate));
+            builder.setNextUpdate(Date.from(nextUpdate));
+            revoked.forEach((serial, when) -> builder.addCRLEntry(serial, Date.from(when), CRLReason.keyCompromise));
             X509CRLHolder holder = builder.build(new JcaContentSignerBuilder("SHA256withRSA")
-                    .build(ofRoot ? rootKeys.getPrivate() : intermediateKeys.getPrivate()));
+                    .build(signingKey != null ? signingKey : ofRoot ? rootKeys.getPrivate() : intermediateKeys.getPrivate()));
             return holder.getEncoded();
         } catch (Exception e) {
             throw new IllegalStateException(e);

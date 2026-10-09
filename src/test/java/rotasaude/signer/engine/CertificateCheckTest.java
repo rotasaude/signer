@@ -23,6 +23,7 @@ class CertificateCheckTest {
     @AfterEach
     void crlBack() {
         PKI.crlAvailable(true);
+        PKI.crlMode(TestPki.CrlMode.GOOD);
     }
 
     @Test
@@ -81,5 +82,42 @@ class CertificateCheckTest {
         SignerFailure failure = assertThrows(SignerFailure.class,
                 () -> engine.checkCertificate("not a certificate".getBytes(StandardCharsets.UTF_8)));
         assertEquals(SignerFailure.Code.INVALID_CERTIFICATE, failure.code);
+    }
+
+    @Test
+    void crlSignedByAnotherKeyIsIndeterminate() throws Exception {
+        byte[] der = PKI.professional().certificate().getEncoded();
+        PKI.crlMode(TestPki.CrlMode.WRONG_KEY);
+
+        CertificateCheck result = engine.checkCertificate(der);
+
+        assertEquals("indeterminate", result.status());
+        assertEquals(List.of("revocation_unavailable"), result.reasons());
+    }
+
+    @Test
+    void expiredCrlIsIndeterminate() throws Exception {
+        byte[] der = PKI.professional().certificate().getEncoded();
+        PKI.crlMode(TestPki.CrlMode.EXPIRED);
+
+        CertificateCheck result = engine.checkCertificate(der);
+
+        assertEquals("indeterminate", result.status());
+        assertEquals(List.of("revocation_unavailable"), result.reasons());
+    }
+
+    @Test
+    void certificateOfARevokedIntermediateCaIsInvalid() throws Exception {
+        java.math.BigInteger caSerial = PKI.pki.anchors().get(1).getSerialNumber();
+        byte[] der = PKI.professional().certificate().getEncoded();
+        PKI.pki.revoke(caSerial, Instant.now().minus(Duration.ofMinutes(5)));
+        try {
+            CertificateCheck result = engine.checkCertificate(der);
+
+            assertEquals("invalid", result.status());
+            assertEquals(List.of("certificate_revoked"), result.reasons());
+        } finally {
+            PKI.pki.unrevoke(caSerial);
+        }
     }
 }

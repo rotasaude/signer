@@ -27,6 +27,7 @@ class CadesRoundTripTest {
     @AfterEach
     void crlBack() {
         PKI.crlAvailable(true);
+        PKI.crlMode(TestPki.CrlMode.GOOD);
     }
 
     private byte[] sign(DevPki.Issued professional, byte[] document) throws Exception {
@@ -166,5 +167,42 @@ class CadesRoundTripTest {
         assertEquals(3, bundle.getCertificates().getMatches(null).size());
         assertEquals(2, bundle.getCRLs().getMatches(null).size());
         assertEquals(0, bundle.getSignerInfos().size());
+    }
+
+    @Test
+    void crlSignedByAnotherKeyIsIndeterminate() throws Exception {
+        byte[] p7s = sign(PKI.professional(), JSON);
+        PKI.crlMode(TestPki.CrlMode.WRONG_KEY);
+
+        Verification result = engine.verify(Kind.CADES, JSON, p7s);
+
+        assertEquals(Verification.INDETERMINATE, result.status());
+        assertEquals(List.of("revocation_unavailable"), result.reasons());
+    }
+
+    @Test
+    void expiredCrlIsIndeterminate() throws Exception {
+        byte[] p7s = sign(PKI.professional(), JSON);
+        PKI.crlMode(TestPki.CrlMode.EXPIRED);
+
+        Verification result = engine.verify(Kind.CADES, JSON, p7s);
+
+        assertEquals(Verification.INDETERMINATE, result.status());
+        assertEquals(List.of("revocation_unavailable"), result.reasons());
+    }
+
+    @Test
+    void signatureMadeAfterTheIntermediateCaWasRevokedIsInvalid() throws Exception {
+        java.math.BigInteger caSerial = PKI.pki.anchors().get(1).getSerialNumber();
+        byte[] p7s = sign(PKI.professional(), JSON);
+        PKI.pki.revoke(caSerial, Instant.now().minus(Duration.ofHours(1)));
+        try {
+            Verification result = engine.verify(Kind.CADES, JSON, p7s);
+
+            assertEquals(Verification.INVALID, result.status());
+            assertTrue(result.reasons().contains("certificate_revoked"), result.reasons().toString());
+        } finally {
+            PKI.pki.unrevoke(caSerial);
+        }
     }
 }

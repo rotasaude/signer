@@ -4,7 +4,6 @@ import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Date;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -26,15 +25,13 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cms.CMSProcessableByteArray;
 import org.bouncycastle.cms.CMSSignedData;
 import org.bouncycastle.cms.SignerInformation;
-import org.demoiselle.signer.core.exception.CertificateRevocationException;
-import org.demoiselle.signer.core.exception.CertificateValidatorCRLException;
 import org.demoiselle.signer.core.extension.BasicCertificate;
 import org.demoiselle.signer.core.extension.ICPBRCertificatePF;
-import org.demoiselle.signer.core.validator.CRLValidator;
 import org.demoiselle.signer.policy.impl.cades.SignatureInformations;
 import org.demoiselle.signer.policy.impl.cades.ValidationMessageCode;
 import org.demoiselle.signer.policy.impl.cades.pkcs7.impl.CAdESChecker;
 import org.demoiselle.signer.policy.impl.pades.pkcs7.impl.PAdESChecker;
+import rotasaude.signer.SignerFailure;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
@@ -50,7 +47,7 @@ public final class SignatureVerifier {
 
     private SignatureVerifier() {}
 
-    public static Verification verify(Kind kind, byte[] document, byte[] signature) {
+    public static Verification verify(Kind kind, byte[] document, byte[] signature, Instant now) {
         byte[] content;
         byte[] cms;
         Instant pdfSignDate = null;
@@ -119,9 +116,13 @@ public final class SignatureVerifier {
         }
         boolean[] keyUsage = certificate.getKeyUsage();
         if (keyUsage == null || !keyUsage[0] || !keyUsage[1]) reasons.add("key_usage");
-        reasons.remove("revocation_unavailable");
-        String revocation = revocation(certificate, signedAt);
-        if (revocation != null) reasons.add(revocation);
+        reasons.removeIf("revocation_unavailable"::equals); // o checker do Demoiselle não autentica LCR: quem decide é Revocation
+        try {
+            reasons.addAll(Revocation.reasons(Chain.of(certificate), signedAt, now));
+        } catch (SignerFailure untrusted) {
+            // LCR de AC desconhecida não diz nada: nem se consulta
+            reasons.add("untrusted_chain");
+        }
 
         List<String> unique = List.copyOf(new LinkedHashSet<>(reasons));
         return new Verification(status(unique), cpf(certificate), name(certificate), policyOid, signedAt, unique);
@@ -141,25 +142,6 @@ public final class SignatureVerifier {
             case INVALID_SIGNATURE, SIGNATURE_INVALID, SIGNATURE_MISMATCH, SIGNATURE_MISMATCH_DIGEST -> "signature_mismatch";
             default -> code.name().toLowerCase(Locale.ROOT);
         };
-    }
-
-    /** NGS2.03.02: revogação conferida no instante da assinatura (sem carimbo, o signingTime). */
-    static String revocation(X509Certificate certificate, Instant signedAt) {
-        CRLValidator validator = new CRLValidator();
-        try {
-            validator.validate(certificate, null);
-            return null;
-        } catch (CertificateRevocationException revoked) {
-            if (signedAt == null) return "certificate_revoked";
-            try {
-                validator.validate(certificate, Date.from(signedAt));
-                return "certificate_revoked_after_signing";
-            } catch (CertificateRevocationException | CertificateValidatorCRLException before) {
-                return "certificate_revoked";
-            }
-        } catch (CertificateValidatorCRLException unavailable) {
-            return "revocation_unavailable";
-        }
     }
 
     private static String policyOid(AttributeTable attributes) {

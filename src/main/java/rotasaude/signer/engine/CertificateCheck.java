@@ -19,12 +19,10 @@ public record CertificateCheck(String status, String signerCpf, Instant notAfter
             throw new SignerFailure(SignerFailure.Code.INVALID_CERTIFICATE);
         }
         List<String> reasons = new ArrayList<>();
-        boolean trusted;
+        List<X509Certificate> chain = null;
         try {
-            Chain.of(certificate);
-            trusted = true;
+            chain = Chain.of(certificate);
         } catch (SignerFailure untrusted) {
-            trusted = false;
             reasons.add("untrusted_chain");
         }
         if (now.isBefore(certificate.getNotBefore().toInstant()) || now.isAfter(certificate.getNotAfter().toInstant())) {
@@ -32,9 +30,8 @@ public record CertificateCheck(String status, String signerCpf, Instant notAfter
         }
         boolean[] keyUsage = certificate.getKeyUsage();
         if (keyUsage == null || !keyUsage[0] || !keyUsage[1]) reasons.add("key_usage");
-        if (trusted) { // LCR de AC desconhecida não diz nada: nem se consulta
-            String revocation = SignatureVerifier.revocation(certificate, null);
-            if (revocation != null) reasons.add(revocation);
+        if (chain != null) { // LCR de AC desconhecida não diz nada: nem se consulta
+            reasons.addAll(Revocation.reasons(chain, null, now));
         }
         List<String> fixed = List.copyOf(reasons);
         return new CertificateCheck(SignatureVerifier.status(fixed), SignatureVerifier.cpf(certificate),
