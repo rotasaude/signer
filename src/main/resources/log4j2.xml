@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Só o log de acesso do signer (método, caminho, status, duração). O Demoiselle fica
+  desligado: ele escreve o DN do titular (nome e CPF) em vários níveis.
+-->
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="out" target="SYSTEM_OUT" follow="true">
+      <PatternLayout pattern="%d{ISO8601}{UTC}Z %-5level %c{1} - %msg%n"/>
+    </Console>
+  </Appenders>
+  <Loggers>
+    <Logger name="rotasaude.signer" level="info" additivity="false">
+      <AppenderRef ref="out"/>
+    </Logger>
+    <Logger name="org.demoiselle" level="off" additivity="false"/>
+    <Logger name="org.apache.pdfbox" level="error" additivity="false">
+      <AppenderRef ref="out"/>
+    </Logger>
+    <Root level="warn">
+      <AppenderRef ref="out"/>
+    </Root>
+  </Loggers>
+</Configuration>
