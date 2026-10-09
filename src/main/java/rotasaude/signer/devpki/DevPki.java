@@ -6,6 +6,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
@@ -161,6 +162,23 @@ public final class DevPki {
         Files.writeString(dir.resolve("intermediate.key.pem"), pem(intermediateKeys.getPrivate()));
         Files.write(dir.resolve("root.crl"), crl("root.crl"));
         Files.write(dir.resolve("intermediate.crl"), crl("intermediate.crl"));
+        openForDevApi(dir);
+    }
+
+    /**
+     * Só dev: o volume é compartilhado com o api (outro uid), cujo PSC falso lê a chave da intermediária
+     * e reescreve as LCRs para testar revogação. Diretório 0777 e LCRs 0666; sem POSIX, ignora.
+     */
+    static void openForDevApi(Path dir) throws IOException {
+        try {
+            Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxrwxrwx"));
+            for (String crl : List.of("root.crl", "intermediate.crl")) {
+                Path file = dir.resolve(crl);
+                if (Files.exists(file)) Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-rw-rw-"));
+            }
+        } catch (UnsupportedOperationException ignored) {
+            // sistema de arquivos sem POSIX
+        }
     }
 
     /** Uso: DevPki <dir> <crlBaseUrl>. Não sobrescreve: com anchors.pem no diretório, não faz nada. */
@@ -170,7 +188,10 @@ public final class DevPki {
             System.exit(2);
         }
         Path dir = Path.of(args[0]);
-        if (Files.exists(dir.resolve("anchors.pem"))) return;
+        if (Files.exists(dir.resolve("anchors.pem"))) {
+            openForDevApi(dir); // volumes criados antes desta regra ganham as permissões no próximo boot
+            return;
+        }
         generate(args[1]).writeTo(dir);
     }
 

@@ -57,4 +57,19 @@ class DevPkiTest {
         }
         assertEquals(anchors, Files.readString(dir.resolve("anchors.pem")));
     }
+
+    @Test
+    void writeToLetsAnotherUidRewriteTheCrls(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        PKI.pki.writeTo(dir);
+        if (!java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) return;
+
+        assertEquals("rwxrwxrwx", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(dir)));
+        for (String crl : List.of("root.crl", "intermediate.crl")) {
+            assertEquals("rw-rw-rw-", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(dir.resolve(crl))));
+        }
+
+        Files.setPosixFilePermissions(dir, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+        DevPki.main(new String[] {dir.toString(), "http://signer:8090/dev-pki/"});
+        assertEquals("rwxrwxrwx", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(dir)));
+    }
 }
