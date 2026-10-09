@@ -180,7 +180,10 @@ public final class SignerServer {
     private static JsonNode read(HttpExchange exchange) throws IOException {
         try (InputStream in = exchange.getRequestBody()) {
             byte[] raw = in.readNBytes(MAX_BODY + 1);
-            if (raw.length > MAX_BODY) throw invalidRequest();
+            if (raw.length > MAX_BODY) {
+                in.readNBytes(8 * 1024 * 1024); // esgota um pouco do resto: fechar com o cliente ainda enviando o derruba com reset, sem ver o 400
+                throw invalidRequest();
+            }
             JsonNode node = JSON.readTree(raw);
             if (node == null || !node.isObject()) throw invalidRequest();
             return node;
