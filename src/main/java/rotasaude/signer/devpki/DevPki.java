@@ -6,6 +6,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -20,6 +21,7 @@ import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.bouncycastle.asn1.ASN1EncodableVector;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.DEROctetString;
@@ -167,17 +169,32 @@ public final class DevPki {
 
     /**
      * Só dev: o volume é compartilhado com o api (outro uid), cujo PSC falso lê a chave da intermediária
-     * e reescreve as LCRs para testar revogação. Diretório 0777 e LCRs 0666; sem POSIX, ignora.
+     * e reescreve as LCRs para testar revogação. Diretório 0777 e LCRs 0666; sem POSIX, ignora. Cada
+     * caminho é tentado sozinho e falha não derruba o boot: se o api trocou a LCR (o arquivo passa a ser
+     * do uid dele), o chmod dá AccessDeniedException e o signer segue — a LCR dele já é legível.
      */
-    static void openForDevApi(Path dir) throws IOException {
+    static void openForDevApi(Path dir) {
+        openForDevApi(dir, Files::setPosixFilePermissions);
+    }
+
+    /** Ponto de troca para teste: quem aplica as permissões. */
+    interface PermissionSetter {
+        void apply(Path path, Set<PosixFilePermission> permissions) throws IOException;
+    }
+
+    static void openForDevApi(Path dir, PermissionSetter setter) {
+        relax(setter, dir, "rwxrwxrwx");
+        for (String crl : List.of("root.crl", "intermediate.crl")) {
+            Path file = dir.resolve(crl);
+            if (Files.exists(file)) relax(setter, file, "rw-rw-rw-");
+        }
+    }
+
+    private static void relax(PermissionSetter setter, Path path, String permissions) {
         try {
-            Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxrwxrwx"));
-            for (String crl : List.of("root.crl", "intermediate.crl")) {
-                Path file = dir.resolve(crl);
-                if (Files.exists(file)) Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-rw-rw-"));
-            }
-        } catch (UnsupportedOperationException ignored) {
-            // sistema de arquivos sem POSIX
+            setter.apply(path, PosixFilePermissions.fromString(permissions));
+        } catch (UnsupportedOperationException | IOException ignored) {
+            // sem POSIX, ou o caminho é de outro uid (o api reescreveu a LCR): segue o boot
         }
     }
 

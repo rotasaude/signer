@@ -72,4 +72,25 @@ class DevPkiTest {
         DevPki.main(new String[] {dir.toString(), "http://signer:8090/dev-pki/"});
         assertEquals("rwxrwxrwx", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(dir)));
     }
+
+    @Test
+    void openForDevApiSurvivesAPathItCannotChmod() throws Exception {
+        Path dir = Files.createTempDirectory("dev-pki");
+        Files.write(dir.resolve("root.crl"), new byte[] {1});
+        Files.write(dir.resolve("intermediate.crl"), new byte[] {1});
+        List<Path> applied = new java.util.ArrayList<>();
+        DevPki.openForDevApi(dir, (path, permissions) -> {
+            if (path.getFileName().toString().equals("intermediate.crl")) {
+                throw new java.nio.file.AccessDeniedException(path.toString()); // LCR trocada pelo api (uid 1000)
+            }
+            if (path.equals(dir)) throw new java.io.IOException("diretório de outro dono");
+            applied.add(path);
+        });
+        assertEquals(List.of(dir.resolve("root.crl")), applied);
+    }
+
+    @Test
+    void openForDevApiIgnoresAMissingDirectory() {
+        DevPki.openForDevApi(Path.of("/nonexistent-dev-pki-" + System.nanoTime()));
+    }
 }
