@@ -51,7 +51,7 @@ class SignerServerTest {
         }
         devPkiDir = Files.createTempDirectory("dev-pki");
         PKI.pki.writeTo(devPkiDir);
-        server = SignerServer.start(Config.fromEnv(Map.of("SIGNER_TOKEN", TOKEN, "SIGNER_PORT", String.valueOf(port),
+        server = SignerServer.start(Config.fromEnv(Map.of("SIGNER_TOKEN", TOKEN, "SIGNER_ENV", "development", "SIGNER_PORT", String.valueOf(port),
                 "SIGNER_DEV_PKI_DIR", devPkiDir.toString())), new SignatureEngine(Clock.systemUTC()));
         base = "http://127.0.0.1:" + port;
     }
