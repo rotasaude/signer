@@ -22,7 +22,7 @@ infraestrutura e o `signer` nunca grava documento.
 | `GET /health` | Versão e hora do último download de LCR bem-sucedido. |
 
 Formas e erros: `docs/superpowers/plans/2026-10-08-module-19b-signature-contracts.md` §9
-(repo `docs`). Toda rota, exceto `/dev-pki/*` (só dev), exige `Authorization: Bearer $SIGNER_TOKEN`. O corpo da requisição é limitado a 48 MB.
+(repo `docs`). Toda rota, exceto `/dev-pki/*` (só dev), exige `Authorization: Bearer $SIGNER_TOKEN`. O corpo da requisição é limitado a 48 MB; no `/prepare`, um PDF preparado acima de 32 MiB é recusado com 400 `invalid_request` (o `prepared_state` não caberia no `/assemble`).
 
 Políticas (padrões do Demoiselle Signer 4.6.2, lidas do `.der` da política no jar):
 CAdES AD-RB v2.4 (`2.16.76.1.7.1.1.2.4`) e PAdES AD-RB v1.3 (`2.16.76.1.7.1.11.1.3`).
@@ -45,11 +45,11 @@ gate de go-live `rotasaude/api#53`. Dev e staging rodam contra a AC de teste (`D
 |---|---|---|
 | `SIGNER_TOKEN` | — (obrigatório, ≥ 32 caracteres) | Token compartilhado com o `api`/worker; também deriva a chave do `prepared_state`. |
 | `SIGNER_PORT` | `8090` | Porta HTTP. |
-| `SIGNER_ENV` | vazio | Variável do próprio Demoiselle: `production` desliga as cadeias de homologação da ICP-Brasil. Aqui, também proíbe as duas abaixo (o boot falha). |
+| `SIGNER_ENV` | — (obrigatório) | `development`, `staging` ou `production`, exatamente assim (minúsculas); ausente, vazia ou outro valor = o boot falha (saída 1). Também é variável do próprio Demoiselle: `production` desliga as cadeias de homologação da ICP-Brasil. Aqui, `production` também proíbe as duas abaixo e a propriedade `-Dsigner.extraTrustAnchors` (por exemplo via `JAVA_TOOL_OPTIONS`); o boot falha. |
 | `SIGNER_EXTRA_TRUST_ANCHORS` | — | PEM com âncoras extras (AC de teste/dev). Nunca em produção. |
 | `SIGNER_DEV_PKI_DIR` | — | Diretório da AC de desenvolvimento; liga `GET /dev-pki/{root.crl,intermediate.crl}` sem token. Nunca em produção. |
 
-Rede de saída: só as LCRs das ACs (pontos de distribuição dos certificados). As LCRs são autenticadas (assinatura do emissor, DN do emissor, `thisUpdate`/`nextUpdate`); LCR inautêntica, vencida ou indisponível resulta em `indeterminate`, nunca em `valid`.
+Rede de saída: só as LCRs das ACs (pontos de distribuição dos certificados). As LCRs são autenticadas (assinatura do emissor, DN do emissor, `thisUpdate`/`nextUpdate`); No `/verify` e no `/certificates/check`, LCR inautêntica, vencida ou indisponível resulta em `indeterminate`, nunca em `valid`. No `/prepare` a revogação é conferida antes de montar os atributos: certificado revogado → 422 `invalid_certificate`; LCR inautêntica, vencida ou indisponível → 500 `internal` (transitório: o `SignJob` do `api` tenta de novo), nunca 422.
 Variáveis do Demoiselle que valem aqui: `SIGNER_CRL_CONNECTION_TIMEOUT`, `SIGNER_PROXY_*`,
 `SIGNER_DISABLE_CHAIN_<CADEIA>`.
 
