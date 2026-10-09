@@ -27,13 +27,24 @@ public final class SignatureEngine {
         }
         Instant now = clock.instant();
         Policies.requireInForce(kind, now);
-        Chain.of(certificate);
+        requireNotRevoked(Chain.of(certificate), now);
         if (kind == Kind.CADES) {
             return new PreparedSignature(kind, certificateDer, SignedAttributes.build(kind, document, certificate, now), null);
         }
         byte[] preparedPdf = PdfPlaceholder.prepare(document, now);
         byte[] content = PdfPlaceholder.signedContent(preparedPdf);
         return new PreparedSignature(kind, certificateDer, SignedAttributes.build(kind, content, certificate, now), preparedPdf);
+    }
+
+    /**
+     * Revogação agora, antes do Demoiselle (que trata LCR fora do ar como certificado ruim):
+     * revogado = 422 invalid_certificate; LCR indisponível ou inautêntica = 500 internal (transitório,
+     * o SignJob do api tenta de novo). Esta checagem é a autoritativa da LCR no /prepare.
+     */
+    private static void requireNotRevoked(List<X509Certificate> chain, Instant now) {
+        List<String> reasons = Revocation.reasons(chain, null, now);
+        if (reasons.contains("certificate_revoked")) throw new SignerFailure(SignerFailure.Code.INVALID_CERTIFICATE);
+        if (!reasons.isEmpty()) throw new SignerFailure(SignerFailure.Code.INTERNAL);
     }
 
     public Assembled assemble(PreparedSignature prepared, byte[] rawSignature) {

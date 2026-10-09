@@ -108,6 +108,34 @@ class CadesRoundTripTest {
     }
 
     @Test
+    void unreachableCrlAtPrepareIsTransientNotABadCertificate() throws Exception {
+        byte[] der = PKI.professional().certificate().getEncoded();
+        PKI.crlAvailable(false);
+        assertEquals(SignerFailure.Code.INTERNAL, assertThrows(SignerFailure.class, () -> engine.prepare(Kind.CADES, JSON, der)).code);
+        assertEquals(SignerFailure.Code.INTERNAL, assertThrows(SignerFailure.class,
+                () -> engine.prepare(Kind.PADES, TestPki.samplePdf("Consulta"), der)).code);
+        PKI.crlAvailable(true);
+        engine.prepare(Kind.CADES, JSON, der);
+    }
+
+    @Test
+    void demoiselleCrlFailureAfterOurCheckIsTransient() throws Exception {
+        // a corrida em que a LCR cai entre a nossa checagem e a do Demoiselle
+        java.security.cert.X509Certificate certificate = PKI.professional().certificate();
+        PKI.crlAvailable(false);
+        assertEquals(SignerFailure.Code.INTERNAL, assertThrows(SignerFailure.class,
+                () -> SignedAttributes.build(Kind.CADES, JSON, certificate, Instant.now())).code);
+    }
+
+    @Test
+    void certificateRevokedIsRefusedAtPrepare() throws Exception {
+        DevPki.Issued professional = PKI.professional();
+        PKI.pki.revoke(professional.certificate().getSerialNumber(), Instant.now().minus(Duration.ofHours(1)));
+        byte[] der = professional.certificate().getEncoded();
+        assertEquals(SignerFailure.Code.INVALID_CERTIFICATE, assertThrows(SignerFailure.class, () -> engine.prepare(Kind.CADES, JSON, der)).code);
+    }
+
+    @Test
     void certificateRevokedBeforeSigningIsInvalid() throws Exception {
         DevPki.Issued professional = PKI.professional();
         byte[] p7s = sign(professional, JSON);

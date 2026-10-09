@@ -13,6 +13,7 @@ import org.bouncycastle.asn1.DERSet;
 import org.bouncycastle.asn1.cms.AttributeTable;
 import org.bouncycastle.asn1.cms.CMSAttributes;
 import org.bouncycastle.asn1.cms.Time;
+import org.demoiselle.signer.core.exception.CertificateValidatorCRLException;
 import org.demoiselle.signer.policy.impl.cades.pkcs7.impl.CAdESSigner;
 import rotasaude.signer.SignerFailure;
 
@@ -34,7 +35,10 @@ public final class SignedAttributes {
             table = signer.prepareSignedAttributes(content, null);
             signer.prepareAlgAndLength();
         } catch (RuntimeException e) {
-            // cadeia, validade, LCR ou tamanho de chave recusados pelo Demoiselle
+            // A revogação já foi decidida pela nossa checagem (SignatureEngine#prepare, autoritativa):
+            // erro de LCR do Demoiselle aqui é LCR fora do ar ou mudança entre as duas leituras, logo
+            // transitório (500), nunca certificado ruim. Cadeia, validade e tamanho de chave seguem 422.
+            if (crlFailure(e)) throw new SignerFailure(SignerFailure.Code.INTERNAL);
             throw new SignerFailure(SignerFailure.Code.INVALID_CERTIFICATE);
         }
         if (kind == Kind.CADES && table.get(CMSAttributes.signingTime) == null) {
@@ -45,6 +49,13 @@ public final class SignedAttributes {
         } catch (IOException e) {
             throw new SignerFailure(SignerFailure.Code.INTERNAL);
         }
+    }
+
+    private static boolean crlFailure(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof CertificateValidatorCRLException) return true;
+        }
+        return false;
     }
 
     static byte[] sha256(byte[] content) {

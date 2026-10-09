@@ -176,6 +176,23 @@ class SignerServerTest {
     }
 
     @Test
+    void prepareAnswers500WhenTheCrlIsUnavailableAnd422WhenRevoked() throws Exception {
+        DevPki.Issued professional = PKI.professional();
+        byte[] json = "{}".getBytes(StandardCharsets.UTF_8);
+        PKI.crlAvailable(false);
+        try {
+            HttpResponse<String> response = call("POST", "/prepare", TOKEN, prepareBody("cades", json, professional).toString());
+            assertEquals(500, response.statusCode());
+            assertEquals("{\"error\":\"internal\"}", response.body());
+        } finally {
+            PKI.crlAvailable(true);
+        }
+        DevPki.Issued revoked = PKI.professional();
+        PKI.pki.revoke(revoked.certificate().getSerialNumber(), java.time.Instant.now().minusSeconds(3600));
+        assertEquals("invalid_certificate", post("/prepare", prepareBody("cades", json, revoked), 422).get("error").asText());
+    }
+
+    @Test
     void acceptsBodiesUpToTheContractLimitAndRefusesBeyond() throws Exception {
         DevPki.Issued professional = PKI.professional();
         byte[] big = new byte[25 * 1024 * 1024];
