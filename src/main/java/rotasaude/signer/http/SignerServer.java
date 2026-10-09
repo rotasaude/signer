@@ -1,5 +1,7 @@
 package rotasaude.signer.http;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -37,8 +39,9 @@ import rotasaude.signer.engine.Verification;
 public final class SignerServer {
 
     private static final Logger LOG = LogManager.getLogger(SignerServer.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
     private static final int MAX_BODY = 48 * 1024 * 1024;
+    private static final ObjectMapper JSON = new ObjectMapper(JsonFactory.builder()
+            .streamReadConstraints(StreamReadConstraints.builder().maxStringLength(MAX_BODY).build()).build());
     private static final Set<String> DEV_PKI_FILES = Set.of("root.crl", "intermediate.crl");
 
     private final Config config;
@@ -120,7 +123,8 @@ public final class SignerServer {
     private ObjectNode verify(JsonNode request) {
         Kind kind = Kind.parse(text(request, "kind"));
         JsonNode document = request.get("document_base64");
-        byte[] documentBytes = document == null || document.isNull() ? null : base64(request, "document_base64");
+        // contrato §13: em PAdES o campo é ignorado (nem decodificado)
+        byte[] documentBytes = kind != Kind.CADES || document == null || document.isNull() ? null : base64(request, "document_base64");
         Verification result = engine.verify(kind, documentBytes, base64(request, "signature_base64"));
         ObjectNode out = JSON.createObjectNode();
         out.put("status", result.status());

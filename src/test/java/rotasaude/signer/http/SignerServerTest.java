@@ -176,6 +176,27 @@ class SignerServerTest {
     }
 
     @Test
+    void acceptsBodiesUpToTheContractLimitAndRefusesBeyond() throws Exception {
+        DevPki.Issued professional = PKI.professional();
+        byte[] big = new byte[25 * 1024 * 1024];
+        post("/prepare", prepareBody("cades", big, professional), 200);
+        big = null;
+
+        String oversized = "{\"document_base64\":\"" + "A".repeat(49 * 1024 * 1024) + "\"}";
+        HttpResponse<String> response = call("POST", "/prepare", TOKEN, oversized);
+        assertEquals(400, response.statusCode());
+        assertEquals("{\"error\":\"invalid_request\"}", response.body());
+    }
+
+    @Test
+    void padesVerifyIgnoresDocumentField() throws Exception {
+        JsonNode assembled = signOverHttp("pades", TestPki.samplePdf("Consulta"), PKI.professional());
+        JsonNode verified = post("/verify", JSON.createObjectNode().put("kind", "pades").put("document_base64", "!!not base64")
+                .put("signature_base64", assembled.get("signature_base64").asText()), 200);
+        assertEquals("valid", verified.get("status").asText(), verified.toString());
+    }
+
+    @Test
     void devPkiServesOnlyTheCrlsWithoutToken() throws Exception {
         assertEquals(200, call("GET", "/dev-pki/intermediate.crl", null, null).statusCode());
         assertEquals(200, call("GET", "/dev-pki/root.crl", null, null).statusCode());
