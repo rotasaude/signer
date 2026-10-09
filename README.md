@@ -22,7 +22,7 @@ infraestrutura e o `signer` nunca grava documento.
 | `GET /health` | Versão e hora do último download de LCR bem-sucedido. |
 
 Formas e erros: `docs/superpowers/plans/2026-10-08-module-19b-signature-contracts.md` §9
-(repo `docs`). Toda rota exige `Authorization: Bearer $SIGNER_TOKEN`.
+(repo `docs`). Toda rota, exceto `/dev-pki/*` (só dev), exige `Authorization: Bearer $SIGNER_TOKEN`. O corpo da requisição é limitado a 48 MB.
 
 Políticas (padrões do Demoiselle Signer 4.6.2, lidas do `.der` da política no jar):
 CAdES AD-RB v2.4 (`2.16.76.1.7.1.1.2.4`) e PAdES AD-RB v1.3 (`2.16.76.1.7.1.11.1.3`).
@@ -34,6 +34,11 @@ Motivos do `/verify`: `malformed_signature`, `signature_mismatch`, `untrusted_ch
 `revocation_unavailable` e `certificate_revoked_after_signing` (sozinhos, `indeterminate`);
 outros códigos do Demoiselle aparecem em minúsculas.
 
+## Estado da prova com PSC real
+
+A prova com um PSC real (sandbox VIDaaS + `validar.iti.gov.br`) **não foi feita**. Ela é o
+gate de go-live `rotasaude/api#53`. Dev e staging rodam contra a AC de teste (`DevPki`) e o PSC simulado.
+
 ## Configuração
 
 | Variável | Padrão | O que é |
@@ -44,7 +49,7 @@ outros códigos do Demoiselle aparecem em minúsculas.
 | `SIGNER_EXTRA_TRUST_ANCHORS` | — | PEM com âncoras extras (AC de teste/dev). Nunca em produção. |
 | `SIGNER_DEV_PKI_DIR` | — | Diretório da AC de desenvolvimento; liga `GET /dev-pki/{root.crl,intermediate.crl}` sem token. Nunca em produção. |
 
-Rede de saída: só as LCRs das ACs (pontos de distribuição dos certificados).
+Rede de saída: só as LCRs das ACs (pontos de distribuição dos certificados). As LCRs são autenticadas (assinatura do emissor, DN do emissor, `thisUpdate`/`nextUpdate`); LCR inautêntica, vencida ou indisponível resulta em `indeterminate`, nunca em `valid`.
 Variáveis do Demoiselle que valem aqui: `SIGNER_CRL_CONNECTION_TIMEOUT`, `SIGNER_PROXY_*`,
 `SIGNER_DISABLE_CHAIN_<CADEIA>`.
 
