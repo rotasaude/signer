@@ -34,7 +34,8 @@ public record CertificateCheck(String status, String signerCpf, Instant notAfter
             reasons.addAll(Revocation.reasons(chain, null, now));
         }
         List<String> fixed = List.copyOf(reasons);
-        return new CertificateCheck(SignatureVerifier.status(fixed), SignatureVerifier.cpf(certificate),
+        // CPF só de certificado com cadeia confiável: de AC desconhecida, o dado não vale nada.
+        return new CertificateCheck(SignatureVerifier.status(fixed), chain == null ? null : SignatureVerifier.cpf(certificate),
                 certificate.getNotAfter().toInstant(), fixed);
     }
 }

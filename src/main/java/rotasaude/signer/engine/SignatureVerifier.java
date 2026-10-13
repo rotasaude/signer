@@ -43,6 +43,9 @@ import org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
  */
 public final class SignatureVerifier {
 
+    /** Tolerância de relógio entre quem assina e quem verifica. */
+    static final java.time.Duration CLOCK_SKEW = java.time.Duration.ofMinutes(5);
+
     static final Set<String> INDETERMINATE_REASONS = Set.of("revocation_unavailable", "certificate_revoked_after_signing");
 
     private SignatureVerifier() {}
@@ -88,6 +91,17 @@ public final class SignatureVerifier {
         String policyOid = policyOid(signer.getSignedAttributes());
         Instant signedAt = kind == Kind.CADES ? signingTime(signer.getSignedAttributes()) : pdfSignDate;
 
+        List<X509Certificate> chain;
+        try {
+            chain = Chain.of(certificate);
+        } catch (SignerFailure untrusted) {
+            // Cadeia desconhecida: nada de rede (o checker do Demoiselle baixa LCR) e nada do titular.
+            reasons.add("untrusted_chain");
+            if (policyOid == null || !Policies.acceptedOids(kind).contains(policyOid)) reasons.add("policy_mismatch");
+            List<String> unique = List.copyOf(new LinkedHashSet<>(reasons));
+            return new Verification(status(unique), null, null, policyOid, signedAt, unique);
+        }
+
         List<SignatureInformations> infos;
         try {
             infos = (kind == Kind.CADES ? new CAdESChecker() : new PAdESChecker()).checkDetachedSignature(content, cms);
@@ -111,18 +125,15 @@ public final class SignatureVerifier {
         if (policyOid == null || !Policies.acceptedOids(kind).contains(policyOid)) reasons.add("policy_mismatch");
         if (signedAt == null) {
             reasons.add("signing_time_missing");
+        } else if (signedAt.isAfter(now.plus(CLOCK_SKEW))) {
+            reasons.add("signed_in_future");
         } else if (signedAt.isBefore(certificate.getNotBefore().toInstant()) || signedAt.isAfter(certificate.getNotAfter().toInstant())) {
             reasons.add("certificate_expired");
         }
         boolean[] keyUsage = certificate.getKeyUsage();
         if (keyUsage == null || !keyUsage[0] || !keyUsage[1]) reasons.add("key_usage");
         reasons.removeIf("revocation_unavailable"::equals); // o checker do Demoiselle não autentica LCR: quem decide é Revocation
-        try {
-            reasons.addAll(Revocation.reasons(Chain.of(certificate), signedAt, now));
-        } catch (SignerFailure untrusted) {
-            // LCR de AC desconhecida não diz nada: nem se consulta
-            reasons.add("untrusted_chain");
-        }
+        reasons.addAll(Revocation.reasons(chain, signedAt, now));
 
         List<String> unique = List.copyOf(new LinkedHashSet<>(reasons));
         return new Verification(status(unique), cpf(certificate), name(certificate), policyOid, signedAt, unique);

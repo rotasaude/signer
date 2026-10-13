@@ -2,6 +2,7 @@ package rotasaude.signer.engine;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -231,6 +232,81 @@ class CadesRoundTripTest {
             assertTrue(result.reasons().contains("certificate_revoked"), result.reasons().toString());
         } finally {
             PKI.pki.unrevoke(caSerial);
+        }
+    }
+
+    // ---- R1 (signer#1): itens 1, 2 e 3a ----
+
+    /** Assina com o relógio do signer adiantado (o instante entra no signingTime). */
+    private static byte[] signAt(DevPki.Issued professional, Instant when) throws Exception {
+        SignatureEngine ahead = new SignatureEngine(Clock.fixed(when, java.time.ZoneOffset.UTC));
+        PreparedSignature prepared = ahead.prepare(Kind.CADES, JSON, professional.certificate().getEncoded());
+        return ahead.assemble(prepared, TestPki.rawSign(professional.privateKey(), prepared.signedAttributesDer())).signature();
+    }
+
+    @Test
+    void signingTimeBeyondTheClockSkewIsInvalid() throws Exception {
+        byte[] p7s = signAt(PKI.professional(), Instant.now().plus(Duration.ofMinutes(6)));
+        Verification future = engine.verify(Kind.CADES, JSON, p7s);
+        assertEquals(Verification.INVALID, future.status());
+        assertTrue(future.reasons().contains("signed_in_future"), future.reasons().toString());
+    }
+
+    @Test
+    void signingTimeWithinTheClockSkewIsValid() throws Exception {
+        byte[] p7s = signAt(PKI.professional(), Instant.now().plus(Duration.ofMinutes(4)));
+        Verification skewed = engine.verify(Kind.CADES, JSON, p7s);
+        assertEquals(Verification.VALID, skewed.status(), skewed.reasons().toString());
+    }
+
+    /** CMS destacado de um e-CPF de AC desconhecida, montado direto no BouncyCastle (o signer recusaria). */
+    private static byte[] strangerSignature(DevPki.Issued stranger) throws Exception {
+        org.bouncycastle.cms.CMSSignedDataGenerator generator = new org.bouncycastle.cms.CMSSignedDataGenerator();
+        org.bouncycastle.operator.ContentSigner signer = new org.bouncycastle.operator.jcajce.JcaContentSignerBuilder("SHA256withRSA")
+                .build(stranger.privateKey());
+        generator.addSignerInfoGenerator(new org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder(
+                new org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder().build()).build(signer, stranger.certificate()));
+        generator.addCertificates(new org.bouncycastle.cert.jcajce.JcaCertStore(List.of(stranger.certificate())));
+        return generator.generate(new org.bouncycastle.cms.CMSProcessableByteArray(JSON), false).getEncoded();
+    }
+
+    @Test
+    void untrustedChainNeverReturnsCpfOrName() throws Exception {
+        Verification result = engine.verify(Kind.CADES, JSON, strangerSignature(TestPki.untrustedProfessional()));
+
+        assertEquals(Verification.INVALID, result.status());
+        assertTrue(result.reasons().contains("untrusted_chain"), result.reasons().toString());
+        assertNull(result.signerCpf());
+        assertNull(result.signerName());
+    }
+
+    @Test
+    void indeterminateKeepsTheCpf() throws Exception {
+        byte[] p7s = sign(PKI.professional(), JSON);
+        PKI.crlAvailable(false);
+        Verification result = engine.verify(Kind.CADES, JSON, p7s);
+        assertEquals(Verification.INDETERMINATE, result.status(), result.reasons().toString());
+        assertEquals(TestPki.CPF, result.signerCpf());
+    }
+
+    @Test
+    void untrustedChainMakesNoNetworkRequest() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger hits = new java.util.concurrent.atomic.AtomicInteger();
+        com.sun.net.httpserver.HttpServer counter = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        counter.createContext("/", exchange -> { hits.incrementAndGet(); exchange.sendResponseHeaders(404, -1); exchange.close(); });
+        counter.start();
+        try {
+            DevPki foreign = DevPki.generate("http://127.0.0.1:" + counter.getAddress().getPort() + "/");
+            DevPki.Issued stranger = foreign.issue(TestPki.CPF, TestPki.NAME, java.time.LocalDate.of(1980, 5, 17),
+                    Instant.now().minus(Duration.ofDays(1)), Instant.now().plus(Duration.ofDays(30)));
+            byte[] p7s = strangerSignature(stranger);
+            hits.set(0); // só conta o que o /verify fizer
+
+            engine.verify(Kind.CADES, JSON, p7s);
+
+            assertEquals(0, hits.get());
+        } finally {
+            counter.stop(0);
         }
     }
 }

@@ -1,6 +1,8 @@
 package rotasaude.signer.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.charset.StandardCharsets;
@@ -63,7 +65,7 @@ class CertificateCheckTest {
 
         assertEquals("invalid", result.status());
         assertEquals(List.of("untrusted_chain"), result.reasons());
-        assertEquals(TestPki.CPF, result.signerCpf());
+        assertEquals(null, result.signerCpf()); // R1 item 2: sem cadeia confiável, nada do titular
     }
 
     @Test
@@ -119,5 +121,12 @@ class CertificateCheckTest {
         } finally {
             PKI.pki.unrevoke(caSerial);
         }
+    }
+
+    @Test
+    void untrustedCertificateNeverReturnsTheCpf() throws Exception {
+        CertificateCheck result = CertificateCheck.of(TestPki.untrustedProfessional().certificate().getEncoded(), Instant.now());
+        assertTrue(result.reasons().contains("untrusted_chain"), result.reasons().toString());
+        assertNull(result.signerCpf());
     }
 }
