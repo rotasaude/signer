@@ -266,7 +266,9 @@ class SignerServerTest {
             String head = "POST /prepare HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer " + TOKEN
                     + "\r\nContent-Type: application/json\r\nContent-Length: 60000000\r\n\r\n";
             socket.getOutputStream().write(head.getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().write("{}".getBytes(StandardCharsets.US_ASCII)); // 2 bytes dos 60 MB declarados
             socket.getOutputStream().flush();
+            socket.shutdownOutput(); // o servidor descarta o que chegar e responde sem esperar o resto
             String status = new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII)).readLine();
             assertEquals("HTTP/1.1 400 Bad Request", status);
         }
@@ -361,6 +363,17 @@ class SignerServerTest {
         } finally {
             release.countDown();
             busy.stop(0);
+        }
+    }
+
+    @Test
+    void oversizedBodyIsAlwaysAnsweredWith400NeverReset() throws Exception {
+        // Reset em vez de 400 vira "indisponível" no api (transitório) e o api tenta de novo para sempre.
+        String oversized = "{\"document_base64\":\"" + "A".repeat(49 * 1024 * 1024) + "\"}";
+        for (int i = 0; i < 10; i++) {
+            assertEquals(200, call("GET", "/health", TOKEN, null).statusCode()); // conexão keep-alive reaproveitada
+            HttpResponse<String> response = call("POST", "/prepare", TOKEN, oversized);
+            assertEquals(400, response.statusCode());
         }
     }
 

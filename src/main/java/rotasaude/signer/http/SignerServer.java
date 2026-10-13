@@ -42,6 +42,8 @@ public final class SignerServer {
 
     private static final Logger LOG = LogManager.getLogger(SignerServer.class);
     private static final int MAX_BODY = 48 * 1024 * 1024;
+    private static final int DRAIN_ON_REFUSAL = 8 * 1024 * 1024;
+    private static final long DRAIN_LIMIT = 64L * 1024 * 1024;
     /** Quanto uma operação espera por vaga antes do 503 busy. */
     static final long PERMIT_WAIT_SECONDS = 5;
     private static final ObjectMapper JSON = new ObjectMapper(JsonFactory.builder()
@@ -221,12 +223,18 @@ public final class SignerServer {
             } catch (NumberFormatException e) {
                 throw invalidRequest();
             }
-            if (length > MAX_BODY) throw invalidRequest();
+            if (length > MAX_BODY) {
+                // Recusa sem guardar nada, mas consome o corpo declarado (até DRAIN_LIMIT) antes do 400:
+                // fechar com o cliente ainda enviando o derruba com reset, e o api leria "indisponível"
+                // (transitório, tentaria de novo) em vez de recusa. Acima do limite, só fecha.
+                if (length <= DRAIN_LIMIT) discard(exchange.getRequestBody(), length);
+                throw invalidRequest();
+            }
         }
         try (InputStream in = exchange.getRequestBody()) {
             byte[] raw = in.readNBytes(MAX_BODY + 1);
             if (raw.length > MAX_BODY) {
-                in.readNBytes(8 * 1024 * 1024); // esgota um pouco do resto: fechar com o cliente ainda enviando o derruba com reset, sem ver o 400
+                discard(in, DRAIN_ON_REFUSAL); // esgota um pouco do resto: fechar com o cliente ainda enviando o derruba com reset, sem ver o 400
                 throw invalidRequest();
             }
             JsonNode node = JSON.readTree(raw);
@@ -234,6 +242,21 @@ public final class SignerServer {
             return node;
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw invalidRequest();
+        }
+    }
+
+    /** Lê e descarta até `limit` bytes, sem guardar; fim ou erro do corpo encerra antes (a recusa segue). */
+    private static void discard(InputStream in, long limit) {
+        byte[] buffer = new byte[64 * 1024];
+        long left = limit;
+        try {
+            while (left > 0) {
+                int read = in.read(buffer, 0, (int) Math.min(buffer.length, left));
+                if (read < 0) return;
+                left -= read;
+            }
+        } catch (IOException e) {
+            // cliente fechou antes do fim declarado: nada a esgotar
         }
     }
 
