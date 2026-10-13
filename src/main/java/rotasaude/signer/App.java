@@ -7,6 +7,7 @@ import rotasaude.signer.engine.CrlUrlPolicy;
 import rotasaude.signer.engine.SignatureEngine;
 import rotasaude.signer.engine.TrackingCrlRepository;
 import rotasaude.signer.http.SignerServer;
+import rotasaude.signer.trust.TrustAnchors;
 
 public final class App {
 
@@ -16,7 +17,8 @@ public final class App {
         Config config;
         try {
             config = Config.fromEnv(System.getenv());
-        } catch (IllegalArgumentException e) {
+            TrustAnchors.requireAny(); // sem âncora, toda assinatura seria untrusted_chain
+        } catch (IllegalArgumentException | IllegalStateException e) {
             System.err.println("signer: " + e.getMessage());
             System.exit(1);
             return;

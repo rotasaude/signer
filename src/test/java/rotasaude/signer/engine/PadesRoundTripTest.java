@@ -82,4 +82,21 @@ class PadesRoundTripTest {
         Verification result = engine.verify(Kind.PADES, null, TestPki.samplePdf("sem assinatura"));
         assertEquals(List.of("malformed_signature"), result.reasons());
     }
+
+    // ---- R1 (signer#1): item 4, auto-verificação do PDF produzido ----
+
+    @Test
+    void assembledPdfThatDoesNotVerifyIsRefused() throws Exception {
+        DevPki.Issued professional = PKI.professional();
+        byte[] der = professional.certificate().getEncoded();
+        PreparedSignature first = engine.prepare(Kind.PADES, TestPki.samplePdf("Consulta A"), der);
+        PreparedSignature other = engine.prepare(Kind.PADES, TestPki.samplePdf("Consulta B"), der);
+        // Atributos (e valor RSA) do primeiro, PDF do segundo: o CMS é bom, o PDF montado não confere.
+        PreparedSignature mixed = new PreparedSignature(Kind.PADES, der, first.signedAttributesDer(), other.preparedPdf());
+        byte[] raw = TestPki.rawSign(professional.privateKey(), first.signedAttributesDer());
+
+        SignerFailure failure = assertThrows(SignerFailure.class, () -> engine.assemble(mixed, raw));
+        assertEquals(SignerFailure.Code.ASSEMBLED_SIGNATURE_INVALID, failure.code);
+    }
 }
+

@@ -309,4 +309,27 @@ class CadesRoundTripTest {
             counter.stop(0);
         }
     }
+
+    // ---- R1 (signer#1): item 4, reconferência no /assemble ----
+
+    @Test
+    void certificateRevokedBetweenPrepareAndAssembleIsRefused() throws Exception {
+        DevPki.Issued professional = PKI.professional();
+        PreparedSignature prepared = engine.prepare(Kind.CADES, JSON, professional.certificate().getEncoded());
+        PKI.pki.revoke(professional.certificate().getSerialNumber(), Instant.now().minus(Duration.ofHours(1)));
+        byte[] raw = TestPki.rawSign(professional.privateKey(), prepared.signedAttributesDer());
+
+        assertEquals(SignerFailure.Code.INVALID_CERTIFICATE, assertThrows(SignerFailure.class, () -> engine.assemble(prepared, raw)).code);
+    }
+
+    @Test
+    void crlDownBetweenPrepareAndAssembleIsTransient() throws Exception {
+        DevPki.Issued professional = PKI.professional();
+        PreparedSignature prepared = engine.prepare(Kind.CADES, JSON, professional.certificate().getEncoded());
+        byte[] raw = TestPki.rawSign(professional.privateKey(), prepared.signedAttributesDer());
+        PKI.crlAvailable(false);
+
+        assertEquals(SignerFailure.Code.INTERNAL, assertThrows(SignerFailure.class, () -> engine.assemble(prepared, raw)).code);
+    }
 }
+

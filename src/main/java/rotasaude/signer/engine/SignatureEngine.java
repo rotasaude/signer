@@ -47,11 +47,23 @@ public final class SignatureEngine {
         if (!reasons.isEmpty()) throw new SignerFailure(SignerFailure.Code.INTERNAL);
     }
 
+    /**
+     * Reconfere o certificado (pode ter sido revogado entre o /prepare e o /assemble) e, no PAdES,
+     * verifica o PDF montado antes de devolvê-lo. No CAdES o conteúdo destacado não está no estado
+     * preparado: valem a reconferência e a checagem do valor RSA contra os atributos (CmsAssembler).
+     */
     public Assembled assemble(PreparedSignature prepared, byte[] rawSignature) {
         X509Certificate certificate = certificate(prepared.certificateDer());
         List<X509Certificate> chain = Chain.of(certificate);
+        Instant now = clock.instant();
+        if (now.isAfter(certificate.getNotAfter().toInstant())) throw new SignerFailure(SignerFailure.Code.INVALID_CERTIFICATE);
+        requireNotRevoked(chain, now);
         byte[] cms = CmsAssembler.assemble(prepared.signedAttributesDer(), certificate, chain, rawSignature);
         byte[] signature = prepared.kind() == Kind.CADES ? cms : PdfPlaceholder.inject(prepared.preparedPdf(), cms);
+        if (prepared.kind() == Kind.PADES
+                && Verification.INVALID.equals(SignatureVerifier.verify(Kind.PADES, null, signature, now).status())) {
+            throw new SignerFailure(SignerFailure.Code.ASSEMBLED_SIGNATURE_INVALID);
+        }
         return new Assembled(signature, ValidationMaterial.collect(chain));
     }
 
