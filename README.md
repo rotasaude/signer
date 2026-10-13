@@ -48,10 +48,20 @@ gate de go-live `rotasaude/api#53`. Dev e staging rodam contra a AC de teste (`D
 | `SIGNER_ENV` | — (obrigatório) | `development`, `staging` ou `production`, exatamente assim (minúsculas); ausente, vazia ou outro valor = o boot falha (saída 1). Também é variável do próprio Demoiselle: `production` desliga as cadeias de homologação da ICP-Brasil. Aqui, `production` também proíbe as duas abaixo e a propriedade `-Dsigner.extraTrustAnchors` (por exemplo via `JAVA_TOOL_OPTIONS`); o boot falha. |
 | `SIGNER_EXTRA_TRUST_ANCHORS` | — | PEM com âncoras extras (AC de teste/dev). Nunca em produção. |
 | `SIGNER_DEV_PKI_DIR` | — | Diretório da AC de desenvolvimento; liga `GET /dev-pki/{root.crl,intermediate.crl}` sem token. Nunca em produção. |
+| `SIGNER_MAX_CONCURRENCY` | `8` | Operações simultâneas (`/prepare`, `/assemble`, `/verify`, `/certificates/check`). O excesso recebe 503 `{"error":"busy"}` com `Retry-After: 1`; o `api` trata como indisponível e tenta de novo. `/health` e `/livez` não entram na conta. |
+| `SIGNER_CRL_CACHE_MAX_SECONDS` | `3600` | Idade máxima da LCR no cache em memória (vale o menor entre isso e o `nextUpdate`). `0` desliga o cache. |
+| `SIGNER_CRL_CONNECTION_TIMEOUT` | `5000` | Timeout (ms) de conexão e de leitura do download de LCR. |
 
 Rede de saída: só as LCRs das ACs (pontos de distribuição dos certificados). As LCRs são autenticadas (assinatura do emissor, DN do emissor, `thisUpdate`/`nextUpdate`); No `/verify` e no `/certificates/check`, LCR inautêntica, vencida ou indisponível resulta em `indeterminate`, nunca em `valid`. No `/prepare` a revogação é conferida antes de montar os atributos: certificado revogado → 422 `invalid_certificate`; LCR inautêntica, vencida ou indisponível → 500 `internal` (transitório: o `SignJob` do `api` tenta de novo), nunca 422.
-Variáveis do Demoiselle que valem aqui: `SIGNER_CRL_CONNECTION_TIMEOUT`, `SIGNER_PROXY_*`,
-`SIGNER_DISABLE_CHAIN_<CADEIA>`.
+Todo download de LCR (o nosso e o do checker do Demoiselle) passa pelo `CrlFetcher`: só `http`/`https`, sem seguir redirecionamento, corpo de no máximo 10 MiB e, com `SIGNER_ENV=production`, nunca para endereço interno (loopback, privado, link-local, ULA). No `/verify`, certificado sem cadeia confiável é recusado (`untrusted_chain`) **antes** de qualquer acesso à rede, e sem `signer_cpf`/`signer_name` na resposta.
+Variáveis do Demoiselle que valem aqui: `SIGNER_PROXY_*`, `SIGNER_DISABLE_CHAIN_<CADEIA>`.
+
+## Operação
+
+- `GET /livez` (sem token): `ok`. É o que o `HEALTHCHECK` da imagem consulta (`rotasaude.signer.HealthProbe`, sem curl).
+- `GET /health` (com token): `version`, `crl_updated_at` (último download de LCR bem-sucedido), `revocation_unavailable_count` (falhas de LCR desde a partida) e `revocation_unavailable_since` (início da sequência de falhas atual; `null` quando a última tentativa deu certo).
+- Log `WARN revocation_unavailable host=<host>`: LCR indisponível, no máximo uma linha por host por minuto. Persistindo, as verificações saem `indeterminate` e o `/prepare` responde 500.
+- A partida falha (saída 1) sem nenhuma âncora de confiança carregada.
 
 ## Logs
 

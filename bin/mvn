@@ -4,4 +4,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 exec docker run --rm -v "$PWD":/src -w /src -v rotasaude-signer-m2:/root/.m2 \
-  maven:3.9.9-eclipse-temurin-21 mvn -B "$@"
+  mirror.gcr.io/library/maven@sha256:3a4ab3276a087bf276f79cae96b1af04f53731bec53fb2e651aca79e4b10211e mvn -B "$@"
