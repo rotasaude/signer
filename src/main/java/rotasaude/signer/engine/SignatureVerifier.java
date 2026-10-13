@@ -64,7 +64,12 @@ public final class SignatureVerifier {
                 if (dictionary == null) return Verification.malformed();
                 int[] range = dictionary.getByteRange();
                 if (range == null || range.length != 4) return Verification.malformed();
-                if ((long) range[2] + range[3] != signature.length) reasons.add("pdf_modified_after_signing");
+                if ((long) range[2] + range[3] != signature.length) {
+                    reasons.add("pdf_modified_after_signing");
+                } else if (!strictByteRange(range, signature)) {
+                    // Intervalo adulterado: nem se lê o conteúdo coberto, que não é o que foi assinado.
+                    return new Verification(Verification.INVALID, null, null, null, null, List.of("pdf_byte_range_invalid"));
+                }
                 content = dictionary.getSignedContent(signature);
                 cms = canonical(dictionary.getContents(signature));
                 if (dictionary.getSignDate() != null) pdfSignDate = dictionary.getSignDate().toInstant();
@@ -137,6 +142,22 @@ public final class SignatureVerifier {
 
         List<String> unique = List.copyOf(new LinkedHashSet<>(reasons));
         return new Verification(status(unique), cpf(certificate), name(certificate), policyOid, signedAt, unique);
+    }
+
+    /** /ByteRange estrito: começa no zero, sem sobreposição, vão = exatamente o /Contents (<hex>), fim = fim do arquivo. */
+    static boolean strictByteRange(int[] range, byte[] pdf) {
+        if (range == null || range.length != 4) return false;
+        for (int value : range) if (value < 0) return false;
+        if (range[0] != 0) return false;
+        long gapStart = (long) range[0] + range[1];
+        long gapEnd = range[2]; // exclusivo
+        if (gapStart >= gapEnd || gapEnd > pdf.length) return false;
+        if ((long) range[2] + range[3] != pdf.length) return false;
+        if (pdf[(int) gapStart] != '<' || pdf[(int) gapEnd - 1] != '>') return false;
+        for (long i = gapStart + 1; i < gapEnd - 1; i++) {
+            if (Character.digit(pdf[(int) i], 16) < 0) return false;
+        }
+        return true;
     }
 
     /** Nenhum motivo → valid; só motivos de dúvida → indeterminate; qualquer outro → invalid. */

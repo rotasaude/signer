@@ -1,6 +1,7 @@
 package rotasaude.signer.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -97,6 +98,43 @@ class PadesRoundTripTest {
 
         SignerFailure failure = assertThrows(SignerFailure.class, () -> engine.assemble(mixed, raw));
         assertEquals(SignerFailure.Code.ASSEMBLED_SIGNATURE_INVALID, failure.code);
+    }
+
+    // ---- R1 (signer#1): item 7, ByteRange estrito ----
+
+    @Test
+    void strictByteRangeAcceptsOnlyTheExactContentsGap() throws Exception {
+        byte[] pdf = signedPdf();
+        int[] r;
+        try (PDDocument document = Loader.loadPDF(pdf)) {
+            r = document.getLastSignatureDictionary().getByteRange();
+        }
+
+        assertTrue(SignatureVerifier.strictByteRange(r, pdf));
+        assertFalse(SignatureVerifier.strictByteRange(new int[] {1, r[1] - 1, r[2], r[3]}, pdf), "não começa no zero");
+        assertFalse(SignatureVerifier.strictByteRange(new int[] {0, r[2] + 1, r[2], r[3]}, pdf), "intervalos sobrepostos");
+        assertFalse(SignatureVerifier.strictByteRange(new int[] {0, r[1], r[2] + 2, r[3] - 2}, pdf), "vão maior que o /Contents");
+        assertFalse(SignatureVerifier.strictByteRange(new int[] {0, r[1] + 1, r[2], r[3]}, pdf), "vão menor que o /Contents");
+        assertFalse(SignatureVerifier.strictByteRange(new int[] {0, -5, r[2], r[3]}, pdf), "negativo");
+        assertFalse(SignatureVerifier.strictByteRange(new int[] {0, r[1], r[2]}, pdf), "três valores");
+    }
+
+    @Test
+    void byteRangeRewrittenInTheFileIsInvalid() throws Exception {
+        byte[] pdf = signedPdf();
+        String text = new String(pdf, StandardCharsets.ISO_8859_1);
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("/ByteRange\\s*\\[\\s*0\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s*\\]").matcher(text);
+        assertTrue(m.find());
+        String original = m.group();
+        String forged = "/ByteRange [0 " + (Integer.parseInt(m.group(1)) + 1) + " " + m.group(2) + " " + m.group(3) + "]";
+        forged = forged + " ".repeat(Math.max(0, original.length() - forged.length())); // mesmo tamanho: o xref não se mexe
+        byte[] altered = (text.substring(0, m.start()) + forged + text.substring(m.end())).getBytes(StandardCharsets.ISO_8859_1);
+
+        Verification result = engine.verify(Kind.PADES, null, altered);
+
+        assertEquals(Verification.INVALID, result.status());
+        assertTrue(result.reasons().contains("pdf_byte_range_invalid"), result.reasons().toString());
     }
 }
 
