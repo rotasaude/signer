@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import rotasaude.signer.Config;
@@ -49,12 +50,14 @@ public final class SignerServer {
     private final SignatureEngine engine;
     private final PreparedStateCodec codec;
     private final byte[] expectedAuthorization;
+    private final Semaphore permits;
 
     private SignerServer(Config config, SignatureEngine engine) {
         this.config = config;
         this.engine = engine;
         this.codec = new PreparedStateCodec(config.token());
         this.expectedAuthorization = ("Bearer " + config.token()).getBytes(StandardCharsets.UTF_8);
+        this.permits = new Semaphore(config.maxConcurrency());
     }
 
     public static HttpServer start(Config config, SignatureEngine engine) throws IOException {
@@ -62,6 +65,7 @@ public final class SignerServer {
         HttpServer server = HttpServer.create(new InetSocketAddress(config.port()), 0);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/", handler::handle);
+        server.createContext("/livez", handler::livez);
         if (config.devPkiDir() != null) server.createContext("/dev-pki/", handler::devPki);
         server.start();
         return server;
@@ -71,8 +75,14 @@ public final class SignerServer {
         long started = System.nanoTime();
         String route = exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath();
         int status = 500;
+        boolean acquired = false;
         try {
             if (!authorized(exchange)) throw new SignerFailure(SignerFailure.Code.UNAUTHORIZED);
+            // Operações pesadas têm teto; /health nunca espera por elas.
+            if (!"GET /health".equals(route)) {
+                acquired = permits.tryAcquire();
+                if (!acquired) throw new SignerFailure(SignerFailure.Code.BUSY);
+            }
             ObjectNode body = switch (route) {
                 case "POST /prepare" -> prepare(read(exchange));
                 case "POST /assemble" -> assemble(read(exchange));
@@ -90,12 +100,14 @@ public final class SignerServer {
             }
         } catch (SignerFailure failure) {
             status = failure.code.status;
+            if (failure.code == SignerFailure.Code.BUSY) exchange.getResponseHeaders().set("Retry-After", "1");
             send(exchange, status, error(failure.code.wire));
         } catch (Exception unexpected) {
             status = 500;
             LOG.error("{} failed: {}", route, unexpected.getClass().getSimpleName());
             send(exchange, status, error(SignerFailure.Code.INTERNAL.wire));
         } finally {
+            if (acquired) permits.release();
             LOG.info("{} {} {}ms", route, status, (System.nanoTime() - started) / 1_000_000);
         }
     }
@@ -160,6 +172,21 @@ public final class SignerServer {
         return out;
     }
 
+    /** Liveness para o HEALTHCHECK do container: sem token, sem semáforo e sem nenhum dado. */
+    private void livez(HttpExchange exchange) throws IOException {
+        if (!"GET".equals(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(405, -1);
+            exchange.close();
+            return;
+        }
+        byte[] ok = "ok".getBytes(StandardCharsets.US_ASCII);
+        exchange.getResponseHeaders().set("Content-Type", "text/plain");
+        exchange.sendResponseHeaders(200, ok.length);
+        try (OutputStream out = exchange.getResponseBody()) {
+            out.write(ok);
+        }
+    }
+
     /** LCRs da AC de desenvolvimento, sem token (LCR é pública por natureza); nunca a chave. */
     private void devPki(HttpExchange exchange) throws IOException {
         String name = exchange.getRequestURI().getPath().substring("/dev-pki/".length());
@@ -182,6 +209,17 @@ public final class SignerServer {
     }
 
     private static JsonNode read(HttpExchange exchange) throws IOException {
+        // Tamanho declarado acima do teto: recusa antes de ler um byte do corpo.
+        String declared = exchange.getRequestHeaders().getFirst("Content-Length");
+        if (declared != null) {
+            long length;
+            try {
+                length = Long.parseLong(declared.trim());
+            } catch (NumberFormatException e) {
+                throw invalidRequest();
+            }
+            if (length > MAX_BODY) throw invalidRequest();
+        }
         try (InputStream in = exchange.getRequestBody()) {
             byte[] raw = in.readNBytes(MAX_BODY + 1);
             if (raw.length > MAX_BODY) {

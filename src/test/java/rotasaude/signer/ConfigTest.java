@@ -64,4 +64,13 @@ class ConfigTest {
             assertEquals(environment, config.environment());
         }
     }
+
+    @Test
+    void maxConcurrencyDefaultsTo8AndRefusesNonPositive() {
+        assertEquals(8, Config.fromEnv(Map.of("SIGNER_TOKEN", TOKEN, "SIGNER_ENV", "development"), null).maxConcurrency());
+        assertEquals(3, Config.fromEnv(Map.of("SIGNER_TOKEN", TOKEN, "SIGNER_ENV", "development", "SIGNER_MAX_CONCURRENCY", "3"), null).maxConcurrency());
+        assertThrows(IllegalArgumentException.class, () -> Config.fromEnv(Map.of("SIGNER_TOKEN", TOKEN, "SIGNER_ENV", "development", "SIGNER_MAX_CONCURRENCY", "0"), null));
+        assertThrows(IllegalArgumentException.class, () -> Config.fromEnv(Map.of("SIGNER_TOKEN", TOKEN, "SIGNER_ENV", "development", "SIGNER_MAX_CONCURRENCY", "x"), null));
+    }
 }
+

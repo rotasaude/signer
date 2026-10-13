@@ -12,7 +12,8 @@ public final class SignerFailure extends RuntimeException {
         INVALID_CERTIFICATE(422, "invalid_certificate"),
         INVALID_SIGNATURE_VALUE(422, "invalid_signature_value"),
         ASSEMBLED_SIGNATURE_INVALID(422, "assembled_signature_invalid"),
-        INTERNAL(500, "internal");
+        INTERNAL(500, "internal"),
+        BUSY(503, "busy");
 
         public final int status;
         public final String wire;

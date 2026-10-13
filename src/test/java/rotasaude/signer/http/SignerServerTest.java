@@ -251,6 +251,77 @@ class SignerServerTest {
         assertTrue(health.has("revocation_unavailable_since"), health.toString());
     }
 
+    @Test
+    void livezAnswersWithoutTokenAndWithoutDetails() throws Exception {
+        HttpResponse<String> response = call("GET", "/livez", null, null);
+        assertEquals(200, response.statusCode());
+        assertEquals("ok", response.body());
+        assertEquals(405, call("POST", "/livez", null, "{}").statusCode());
+    }
+
+    @Test
+    void refusesOversizedContentLengthBeforeReadingTheBody() throws Exception {
+        try (java.net.Socket socket = new java.net.Socket("127.0.0.1", URI.create(base).getPort())) {
+            socket.setSoTimeout(5000);
+            String head = "POST /prepare HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer " + TOKEN
+                    + "\r\nContent-Type: application/json\r\nContent-Length: 60000000\r\n\r\n";
+            socket.getOutputStream().write(head.getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+            String status = new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII)).readLine();
+            assertEquals("HTTP/1.1 400 Bad Request", status);
+        }
+    }
+
+    @Test
+    void saturatedSignerAnswersBusyButKeepsHealthAndLivez() throws Exception {
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        SignatureEngine blocking = new SignatureEngine(Clock.systemUTC()) {
+            @Override
+            public rotasaude.signer.engine.Verification verify(rotasaude.signer.engine.Kind kind, byte[] document, byte[] signature) {
+                entered.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.verify(kind, document, signature);
+            }
+        };
+        int port;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            port = socket.getLocalPort();
+        }
+        HttpServer busy = SignerServer.start(Config.fromEnv(Map.of("SIGNER_TOKEN", TOKEN, "SIGNER_ENV", "development",
+                "SIGNER_PORT", String.valueOf(port), "SIGNER_MAX_CONCURRENCY", "1")), blocking);
+        String busyBase = "http://127.0.0.1:" + port;
+        String body = JSON.createObjectNode().put("kind", "cades").put("document_base64", B.e(new byte[] {1}))
+                .put("signature_base64", B.e(new byte[] {1})).toString();
+        java.util.function.Function<String, HttpRequest> verifyRequest = b -> HttpRequest.newBuilder(URI.create(busyBase + "/verify"))
+                .header("Authorization", "Bearer " + TOKEN).POST(HttpRequest.BodyPublishers.ofString(b)).build();
+        try {
+            java.util.concurrent.CompletableFuture<HttpResponse<String>> first =
+                    CLIENT.sendAsync(verifyRequest.apply(body), HttpResponse.BodyHandlers.ofString());
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
+
+            HttpResponse<String> second = CLIENT.send(verifyRequest.apply(body), HttpResponse.BodyHandlers.ofString());
+            assertEquals(503, second.statusCode());
+            assertEquals("{\"error\":\"busy\"}", second.body());
+            assertEquals("1", second.headers().firstValue("Retry-After").orElse(null));
+
+            assertEquals(200, CLIENT.send(HttpRequest.newBuilder(URI.create(busyBase + "/health"))
+                    .header("Authorization", "Bearer " + TOKEN).build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+            assertEquals(200, CLIENT.send(HttpRequest.newBuilder(URI.create(busyBase + "/livez")).build(),
+                    HttpResponse.BodyHandlers.ofString()).statusCode());
+
+            release.countDown();
+            assertEquals(200, first.get(10, java.util.concurrent.TimeUnit.SECONDS).statusCode());
+        } finally {
+            release.countDown();
+            busy.stop(0);
+        }
+    }
+
     private static final class B64 {
         String e(byte[] bytes) {
             return Base64.getEncoder().encodeToString(bytes);

@@ -10,7 +10,7 @@ import java.util.List;
 import rotasaude.signer.SignerFailure;
 
 /** As três operações do contrato §9 sobre bytes; o HTTP fica em rotasaude.signer.http. */
-public final class SignatureEngine {
+public class SignatureEngine { // não final: o teste de saturação do HTTP a estende
 
     public record Assembled(byte[] signature, byte[] validationMaterial) {}
 
