@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.Proxy;
 import java.net.URI;
+import java.security.cert.X509CRL;
 import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.time.Duration;
@@ -13,17 +14,25 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.demoiselle.signer.core.ca.manager.CAManager;
 import org.demoiselle.signer.core.extension.BasicCertificate;
 import org.demoiselle.signer.core.extension.ICPBR_CRL;
 import org.demoiselle.signer.core.repository.ConfigurationRepo;
 
 /**
  * Baixa as LCRs dos pontos de distribuição do certificado, só para destinos que a política
- * aceita, com cache por URL até o menor entre o nextUpdate e a idade máxima. LCR já vencida
- * não entra no cache (quem decide se ela vale é Revocation). Nunca lança: falha vira lista
+ * aceita, parando na primeira que responde, com cache por URL até o menor entre o nextUpdate e
+ * a idade máxima. Só LCR que confere entra no cache (quem decide se ela vale é Revocation). Nunca lança: falha vira lista
  * vazia e conta em RevocationHealth.
  */
 public final class CrlFetcher {
+
+    static {
+        // ICPBR_CRL lê a LCR pelo provedor "BC"; quem chegava aqui antes (o OnLineCRLRepository) o registrava.
+        if (java.security.Security.getProvider("BC") == null) {
+            java.security.Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
+        }
+    }
 
     static final int MAX_CRL_BYTES = 10 * 1024 * 1024;
     static final int MAX_ENTRIES = 256;
@@ -50,16 +59,23 @@ public final class CrlFetcher {
         } catch (Exception e) {
             urls = null;
         }
+        return fetch(certificate, urls == null ? List.of() : urls);
+    }
+
+    /** Para no primeiro ponto de distribuição que entrega uma LCR (como o OnLineCRLRepository). */
+    List<ICPBR_CRL> fetch(X509Certificate certificate, List<String> urls) {
         List<ICPBR_CRL> crls = new ArrayList<>();
-        if (urls == null) return crls;
         for (String url : urls) {
-            ICPBR_CRL crl = one(url);
-            if (crl != null) crls.add(crl);
+            ICPBR_CRL crl = one(certificate, url);
+            if (crl != null) {
+                crls.add(crl);
+                break;
+            }
         }
         return crls;
     }
 
-    private ICPBR_CRL one(String url) {
+    private ICPBR_CRL one(X509Certificate certificate, String url) {
         Instant now = clock.instant();
         String host = host(url);
         if (!policy.allowed(url)) {
@@ -67,11 +83,14 @@ public final class CrlFetcher {
             return null;
         }
         Entry cached = cache.get(url);
-        if (cached != null && now.isBefore(cached.expires())) return cached.crl();
+        if (cached != null && now.isBefore(cached.expires())) {
+            RevocationHealth.recordSuccess(host, now);
+            return cached.crl();
+        }
         try {
             ICPBR_CRL crl = new ICPBR_CRL(download(url));
-            remember(url, crl, now);
-            RevocationHealth.recordSuccess(now);
+            remember(url, certificate, crl, now);
+            RevocationHealth.recordSuccess(host, now);
             return crl;
         } catch (Exception e) {
             cache.remove(url);
@@ -80,14 +99,38 @@ public final class CrlFetcher {
         }
     }
 
-    private void remember(String url, ICPBR_CRL crl, Instant now) {
-        if (maxAge.isZero() || maxAge.isNegative() || crl.getCRL() == null || crl.getCRL().getNextUpdate() == null) return;
+    /**
+     * Só guarda LCR que confere: emitente igual ao do certificado, assinada pela AC emissora e já
+     * vigente. Uma resposta ruim (relógio da AC adiantado, LCR de outra AC) não fica presa no cache.
+     */
+    private void remember(String url, X509Certificate certificate, ICPBR_CRL crl, Instant now) {
+        if (maxAge.isZero() || maxAge.isNegative()) return;
+        X509CRL x509 = crl.getCRL();
+        if (x509 == null || x509.getNextUpdate() == null || x509.getThisUpdate().toInstant().isAfter(now)) return;
+        if (!x509.getIssuerX500Principal().equals(certificate.getIssuerX500Principal())) return;
+        X509Certificate issuer = issuerOf(certificate);
+        if (issuer == null) return;
+        try {
+            x509.verify(issuer.getPublicKey());
+        } catch (Exception e) {
+            return;
+        }
         Instant expires = now.plus(maxAge);
-        Instant next = crl.getCRL().getNextUpdate().toInstant();
+        Instant next = x509.getNextUpdate().toInstant();
         if (next.isBefore(expires)) expires = next;
         if (!expires.isAfter(now)) return;
         if (cache.size() >= MAX_ENTRIES) cache.clear();
         cache.put(url, new Entry(crl, expires));
+    }
+
+    /** Emissor pelas âncoras locais (o mesmo CAManager do Chain); sem ele, não se guarda. */
+    private static X509Certificate issuerOf(X509Certificate certificate) {
+        try {
+            List<X509Certificate> chain = List.copyOf(CAManager.getInstance().getCertificateChain(certificate));
+            return chain.size() < 2 ? null : chain.get(1);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private byte[] download(String url) throws Exception {

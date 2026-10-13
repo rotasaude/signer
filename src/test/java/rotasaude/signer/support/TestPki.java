@@ -49,7 +49,7 @@ public final class TestPki {
     private volatile CrlMode crlMode = CrlMode.GOOD;
 
     /** Como o ponto de distribuição serve as LCRs: boa, assinada por outra chave ou vencida (nextUpdate no passado). */
-    public enum CrlMode { GOOD, WRONG_KEY, EXPIRED }
+    public enum CrlMode { GOOD, WRONG_KEY, EXPIRED, NOT_YET_VALID }
 
     private TestPki() throws IOException {
         HttpServer crlServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -103,6 +103,8 @@ public final class TestPki {
         switch (crlMode) {
             case WRONG_KEY:
                 return pki.crl(name, now.minusSeconds(60), now.plus(Duration.ofDays(1)), FOREIGN_KEY.getPrivate());
+            case NOT_YET_VALID:
+                return pki.crl(name, now.plus(Duration.ofMinutes(10)), now.plus(Duration.ofDays(1)), null);
             case EXPIRED:
                 return pki.crl(name, now.minus(Duration.ofDays(10)), now.minus(Duration.ofDays(1)), null);
             default:

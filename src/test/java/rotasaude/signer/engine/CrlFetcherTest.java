@@ -24,6 +24,11 @@ class CrlFetcherTest {
 
     private static final TestPki PKI = TestPki.get();
 
+    @org.junit.jupiter.api.BeforeEach
+    void clean() {
+        RevocationHealth.forgetOutages();
+    }
+
     @AfterEach
     void back() {
         PKI.crlAvailable(true);
@@ -116,6 +121,59 @@ class CrlFetcherTest {
         PKI.crlAvailable(true);
         fetcher.fetch(certificate);
         assertEquals(null, RevocationHealth.unavailableSince(), "sucesso encerra a sequência de falhas");
+    }
+
+    // ---- revisão final da R1 ----
+
+    @Test
+    void crlSignedByAnotherKeyIsNotCached() throws Exception {
+        CrlFetcher fetcher = new CrlFetcher(local(), Clock.systemUTC(), Duration.ofMinutes(10), 2000);
+        X509Certificate certificate = PKI.professional().certificate();
+        PKI.crlMode(TestPki.CrlMode.WRONG_KEY);
+        assertEquals(1, fetcher.fetch(certificate).size());
+        PKI.crlAvailable(false);
+        assertEquals(0, fetcher.fetch(certificate).size(), "LCR que não confere não fica presa no cache");
+    }
+
+    @Test
+    void crlNotYetValidIsNotCached() throws Exception {
+        CrlFetcher fetcher = new CrlFetcher(local(), Clock.systemUTC(), Duration.ofMinutes(10), 2000);
+        X509Certificate certificate = PKI.professional().certificate();
+        PKI.crlMode(TestPki.CrlMode.NOT_YET_VALID); // relógio da AC adiantado
+        assertEquals(1, fetcher.fetch(certificate).size());
+        PKI.crlAvailable(false);
+        assertEquals(0, fetcher.fetch(certificate).size(), "LCR com thisUpdate no futuro não fica presa no cache");
+    }
+
+    @Test
+    void stopsAtTheFirstDistributionPointThatAnswers() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger hits = new java.util.concurrent.atomic.AtomicInteger();
+        com.sun.net.httpserver.HttpServer counter = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        counter.createContext("/", exchange -> { hits.incrementAndGet(); exchange.sendResponseHeaders(503, -1); exchange.close(); });
+        counter.start();
+        try {
+            X509Certificate certificate = PKI.professional().certificate();
+            String good = new org.demoiselle.signer.core.extension.BasicCertificate(certificate).getCRLDistributionPoint().get(0);
+            String second = "http://127.0.0.1:" + counter.getAddress().getPort() + "/other.crl";
+            CrlFetcher fetcher = new CrlFetcher(local(), Clock.systemUTC(), Duration.ZERO, 2000);
+
+            assertEquals(1, fetcher.fetch(certificate, java.util.List.of(good, second)).size());
+            assertEquals(0, hits.get(), "com a primeira LCR em mãos, não procura as outras");
+        } finally {
+            counter.stop(0);
+        }
+    }
+
+    @Test
+    void outageSinceIsTrackedPerHost() {
+        Instant t0 = Instant.parse("2026-10-13T10:00:00Z");
+        RevocationHealth.recordSuccess("a.example", t0);
+        RevocationHealth.recordSuccess("b.example", t0);
+        RevocationHealth.recordFailure("b.example", t0.plusSeconds(10));
+        RevocationHealth.recordSuccess("a.example", t0.plusSeconds(20));
+        assertEquals(t0.plusSeconds(10), RevocationHealth.unavailableSince(), "sucesso de outra AC não apaga a queda desta");
+        RevocationHealth.recordSuccess("b.example", t0.plusSeconds(30));
+        assertEquals(null, RevocationHealth.unavailableSince());
     }
 
     private static InetAddress[] addresses(String ip) {
