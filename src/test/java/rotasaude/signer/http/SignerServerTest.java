@@ -243,6 +243,14 @@ class SignerServerTest {
         }
     }
 
+    @Test
+    void healthReportsRevocationUnavailability() throws Exception {
+        JsonNode health = JSON.readTree(call("GET", "/health", TOKEN, null).body());
+        assertTrue(health.has("revocation_unavailable_count"), health.toString());
+        assertTrue(health.get("revocation_unavailable_count").isNumber(), health.toString());
+        assertTrue(health.has("revocation_unavailable_since"), health.toString());
+    }
+
     private static final class B64 {
         String e(byte[] bytes) {
             return Base64.getEncoder().encodeToString(bytes);

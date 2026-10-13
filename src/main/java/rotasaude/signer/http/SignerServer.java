@@ -28,6 +28,7 @@ import rotasaude.signer.engine.CertificateCheck;
 import rotasaude.signer.engine.Kind;
 import rotasaude.signer.engine.PreparedSignature;
 import rotasaude.signer.engine.PreparedStateCodec;
+import rotasaude.signer.engine.RevocationHealth;
 import rotasaude.signer.engine.SignatureEngine;
 import rotasaude.signer.engine.TrackingCrlRepository;
 import rotasaude.signer.engine.Verification;
@@ -153,6 +154,9 @@ public final class SignerServer {
         ObjectNode out = JSON.createObjectNode();
         out.put("version", config.version());
         out.put("crl_updated_at", crl == null ? null : crl.toString());
+        out.put("revocation_unavailable_count", RevocationHealth.unavailableCount());
+        Instant since = RevocationHealth.unavailableSince();
+        out.put("revocation_unavailable_since", since == null ? null : since.toString());
         return out;
     }
 

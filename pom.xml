@@ -93,6 +93,8 @@
             <SIGNER_DISABLE_CHAIN_ICP_BRASIL_HOMOLOG>true</SIGNER_DISABLE_CHAIN_ICP_BRASIL_HOMOLOG>
             <SIGNER_REPOSITORY_LPA_ONLINE>false</SIGNER_REPOSITORY_LPA_ONLINE>
             <SIGNER_CRL_CONNECTION_TIMEOUT>2000</SIGNER_CRL_CONNECTION_TIMEOUT>
+            <!-- cache de LCR desligado: os testes revogam e derrubam a LCR da AC de teste na mesma JVM -->
+            <SIGNER_CRL_CACHE_MAX_SECONDS>0</SIGNER_CRL_CACHE_MAX_SECONDS>
           </environmentVariables>
         </configuration>
       </plugin>
