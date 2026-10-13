@@ -13,9 +13,11 @@ COPY src ./src
 RUN mvn -B -q -DskipTests package
 
 FROM mirror.gcr.io/library/eclipse-temurin@sha256:cff19e6215689161eb6162c11b86b0c60ddf802164f2eaf48d570f8fb79a36c5
+# ~/.signer: o Demoiselle guarda ali o pacote de âncoras da ICP-Brasil que baixa do ITI/Serpro
+# (destinos fixos); sem poder gravar, baixaria de novo a cada certificado fora do cache.
 RUN useradd --system --uid 10001 --home-dir /app signer \
- && mkdir -p /app /dev-pki \
- && chown signer /dev-pki
+ && mkdir -p /app /dev-pki /app/.signer \
+ && chown signer /dev-pki /app/.signer
 WORKDIR /app
 COPY --from=build /src/target/signer.jar /app/signer.jar
 COPY --from=build /src/target/lib /app/lib
