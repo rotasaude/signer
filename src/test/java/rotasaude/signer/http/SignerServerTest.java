@@ -322,6 +322,48 @@ class SignerServerTest {
         }
     }
 
+    @Test
+    void shortBurstWaitsForAPermitInsteadOfFailing() throws Exception {
+        // Um /assemble que recebesse 503 perderia a assinatura que o PSC já fez: rajada curta espera.
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        SignatureEngine blocking = new SignatureEngine(Clock.systemUTC()) {
+            @Override
+            public rotasaude.signer.engine.Verification verify(rotasaude.signer.engine.Kind kind, byte[] document, byte[] signature) {
+                entered.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.verify(kind, document, signature);
+            }
+        };
+        int port;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            port = socket.getLocalPort();
+        }
+        HttpServer busy = SignerServer.start(Config.fromEnv(Map.of("SIGNER_TOKEN", TOKEN, "SIGNER_ENV", "development",
+                "SIGNER_PORT", String.valueOf(port), "SIGNER_MAX_CONCURRENCY", "1")), blocking);
+        String busyBase = "http://127.0.0.1:" + port;
+        String body = JSON.createObjectNode().put("kind", "cades").put("document_base64", B.e(new byte[] {1}))
+                .put("signature_base64", B.e(new byte[] {1})).toString();
+        java.util.function.Supplier<HttpRequest> verifyRequest = () -> HttpRequest.newBuilder(URI.create(busyBase + "/verify"))
+                .header("Authorization", "Bearer " + TOKEN).POST(HttpRequest.BodyPublishers.ofString(body)).build();
+        try {
+            java.util.concurrent.CompletableFuture<HttpResponse<String>> first = CLIENT.sendAsync(verifyRequest.get(), HttpResponse.BodyHandlers.ofString());
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            java.util.concurrent.CompletableFuture<HttpResponse<String>> second = CLIENT.sendAsync(verifyRequest.get(), HttpResponse.BodyHandlers.ofString());
+            Thread.sleep(500);
+            release.countDown();
+            assertEquals(200, first.get(10, java.util.concurrent.TimeUnit.SECONDS).statusCode());
+            assertEquals(200, second.get(10, java.util.concurrent.TimeUnit.SECONDS).statusCode());
+        } finally {
+            release.countDown();
+            busy.stop(0);
+        }
+    }
+
     private static final class B64 {
         String e(byte[] bytes) {
             return Base64.getEncoder().encodeToString(bytes);

@@ -42,6 +42,8 @@ public final class SignerServer {
 
     private static final Logger LOG = LogManager.getLogger(SignerServer.class);
     private static final int MAX_BODY = 48 * 1024 * 1024;
+    /** Quanto uma operação espera por vaga antes do 503 busy. */
+    static final long PERMIT_WAIT_SECONDS = 5;
     private static final ObjectMapper JSON = new ObjectMapper(JsonFactory.builder()
             .streamReadConstraints(StreamReadConstraints.builder().maxStringLength(MAX_BODY).build()).build());
     private static final Set<String> DEV_PKI_FILES = Set.of("root.crl", "intermediate.crl");
@@ -80,7 +82,8 @@ public final class SignerServer {
             if (!authorized(exchange)) throw new SignerFailure(SignerFailure.Code.UNAUTHORIZED);
             // Operações pesadas têm teto; /health nunca espera por elas.
             if (!"GET /health".equals(route)) {
-                acquired = permits.tryAcquire();
+                // Espera curta: um /assemble recusado descartaria a assinatura que o PSC já fez.
+                acquired = permits.tryAcquire(PERMIT_WAIT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
                 if (!acquired) throw new SignerFailure(SignerFailure.Code.BUSY);
             }
             ObjectNode body = switch (route) {
